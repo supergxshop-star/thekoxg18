@@ -231,7 +231,7 @@ class GitHubSyncEngine:
 
         existing_assets = set()
         upload_url = ""
-        if self.mode == "release":
+        if self.mode in ["release", "raw"]:
             release = self.get_or_create_release()
             upload_url = release.get("upload_url", "")
             existing_assets = self.get_existing_release_assets(release)
@@ -284,6 +284,43 @@ class GitHubSyncEngine:
                         }
                         self._save_history()
                         processed_count += 1
+                elif self.mode == "raw":
+                    if size > MAX_GITHUB_GIT_FILE_SIZE:
+                        print(f"[!] Warning: File {safe_name} is > 95MB ({size/(1024*1024):.1f}MB). GitHub git blocks files > 100MB.")
+                        print(f"[*] Uploading to GitHub Releases as fallback...")
+                        asset_url = self.upload_to_release(upload_url, local_file, safe_name)
+                        if asset_url:
+                            self.history["synced_files"][safe_name] = {
+                                "size": size,
+                                "url": asset_url,
+                                "type": "release_fallback",
+                                "synced_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            }
+                            self._save_history()
+                            processed_count += 1
+                    else:
+                        raw_dir = Path("./raw")
+                        raw_dir.mkdir(parents=True, exist_ok=True)
+                        dest_file = raw_dir / safe_name
+                        if dest_file.exists():
+                            dest_file.unlink()
+                        local_file.rename(dest_file)
+                        print(f"[*] Saved to raw directory: {dest_file}")
+                        # Commit and push via git
+                        import subprocess
+                        subprocess.run(["git", "add", str(dest_file)], check=True)
+                        subprocess.run(["git", "commit", "-m", f"feat(raw): add {safe_name}"], check=True)
+                        subprocess.run(["git", "push", "origin", "main"], check=True)
+                        raw_url = f"https://raw.githubusercontent.com/{self.repo}/main/raw/{urllib.parse.quote(safe_name)}"
+                        print(f"[+] Raw URL: {raw_url}")
+                        self.history["synced_files"][safe_name] = {
+                            "size": size,
+                            "url": raw_url,
+                            "type": "github_raw",
+                            "synced_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        }
+                        self._save_history()
+                        processed_count += 1
                 else:
                     dest_file = Path("./downloads") / safe_name
                     dest_file.parent.mkdir(parents=True, exist_ok=True)
@@ -298,7 +335,7 @@ class GitHubSyncEngine:
                     processed_count += 1
             finally:
                 # Remove temporary local file only if still in temp_dir
-                if local_file.exists() and self.mode == "release":
+                if local_file.exists():
                     local_file.unlink()
                     print(f"[+] Cleaned temp file: {local_file.name}")
 
@@ -364,7 +401,7 @@ def main():
     parser.add_argument("--repo", default=os.getenv("GITHUB_REPO"), help="Target GitHub repo (e.g. username/repo-name)")
     parser.add_argument("--api", default=os.getenv("MEDIA_API_URL", API_URL_DEFAULT), help="Source API URL")
     parser.add_argument("--tag", default=os.getenv("RELEASE_TAG", "media-vault"), help="GitHub Release tag name")
-    parser.add_argument("--mode", default="release", choices=["release", "local"], help="Sync destination mode")
+    parser.add_argument("--mode", default=os.getenv("SYNC_MODE", "raw"), choices=["raw", "release", "local"], help="Sync destination mode (raw, release, local)")
     parser.add_argument("--proxy", default=os.getenv("PROXY_URL"), help="Proxy URL (e.g. http://127.0.0.1:7890)")
     parser.add_argument("--limit", type=int, default=None, help="Max files to sync in this run")
     parser.add_argument("--dry-run", action="store_true", help="Inspect without downloading/uploading")
@@ -374,7 +411,7 @@ def main():
     token = (args.token or "").strip()
     repo = (args.repo or "").strip()
 
-    if args.mode == "release":
+    if args.mode in ["release", "raw"]:
         while not token:
             if sys.stdin.isatty():
                 try:
