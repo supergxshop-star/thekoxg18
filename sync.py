@@ -148,13 +148,30 @@ class GitHubSyncEngine:
     def get_existing_release_assets(self, release: Dict[str, Any]) -> set:
         """Get set of existing asset names in release to avoid re-uploading."""
         assets = release.get("assets", [])
-        return {a["name"] for a in assets}
+        existing = set()
+        for a in assets:
+            if a.get("name"):
+                existing.add(a["name"])
+                existing.add(urllib.parse.unquote(a["name"]))
+            if a.get("label"):
+                existing.add(a["label"])
+        return existing
 
     def upload_to_release(self, upload_url_template: str, file_path: Path, asset_name: str) -> Optional[str]:
         """Upload file as a GitHub Release Asset."""
         # upload_url format is: https://uploads.github.com/repos/{owner}/{repo}/releases/{id}/assets{?name,label}
         upload_url = upload_url_template.split("{")[0]
-        params = {"name": asset_name}
+
+        # Use percent-encoded name for download URL and Thai title for label
+        safe_url_name = urllib.parse.quote(asset_name, safe=".-_")
+        if len(safe_url_name) > 240:
+            ext = asset_name.rsplit(".", 1)[-1] if "." in asset_name else "mp4"
+            safe_url_name = f"clip_{abs(hash(asset_name))}.{ext}"
+
+        params = {
+            "name": safe_url_name,
+            "label": asset_name[:50],
+        }
         file_size = file_path.stat().st_size
 
         print(f"[*] Uploading to GitHub Release: {asset_name} ({file_size / (1024*1024):.2f} MB)...")
@@ -367,14 +384,29 @@ def main():
             else:
                 break
 
-        while not repo or "/" not in repo:
+        while not repo:
             if sys.stdin.isatty():
                 try:
-                    repo = input("กรุณาใส่ชื่อ GitHub Repo (รูปแบบ 'username/repo-name'): ").strip()
+                    repo = input("กรุณาใส่ชื่อ GitHub Repo: ").strip()
                 except (EOFError, KeyboardInterrupt):
                     break
             else:
                 break
+
+        if "/" not in repo and token:
+            try:
+                u_res = requests.get(
+                    "https://api.github.com/user",
+                    headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"},
+                    timeout=5,
+                )
+                if u_res.status_code == 200:
+                    login = u_res.json().get("login")
+                    if login:
+                        repo = f"{login}/{repo}"
+                        print(f"[*] เติมชื่อบัญชีให้อัตโนมัติ: {repo}")
+            except Exception:
+                pass
 
         if not token:
             print("[!] Error: ต้องระบุ GitHub Token (ตั้งค่าใน .env หรือผ่าน --token)")
