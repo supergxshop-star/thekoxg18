@@ -16,6 +16,12 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 import requests
 
+# Ensure UTF-8 output on Windows terminals
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 API_URL_DEFAULT = "https://ak.xworms.xyz/api.php?action=list&sync=1"
 HISTORY_FILE = "sync_history.json"
 MAX_GITHUB_GIT_FILE_SIZE = 95 * 1024 * 1024  # 95 MB threshold for git commits
