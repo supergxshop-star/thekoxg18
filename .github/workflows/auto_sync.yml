@@ -1,0 +1,64 @@
+name: Auto Sync Clips to GitHub
+
+on:
+  schedule:
+    # Run every 6 hours (UTC)
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Max files to sync (leave blank for unlimited)'
+        required: false
+        default: '10'
+      dry_run:
+        description: 'Dry run test only'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          pip install requests
+
+      - name: Run Auto Sync
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
+          MEDIA_API_URL: "https://ak.xworms.xyz/api.php?action=list&sync=1"
+          RELEASE_TAG: "media-vault"
+        run: |
+          EXTRA_ARGS=""
+          if [ -n "${{ github.event.inputs.limit }}" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --limit ${{ github.event.inputs.limit }}"
+          fi
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --dry-run"
+          fi
+          python sync.py $EXTRA_ARGS
+
+      - name: Commit and Push Sync History
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add sync_history.json || true
+          if git diff --staged --quiet; then
+            echo "No changes in sync history to commit."
+          else
+            git commit -m "chore: update sync history [skip ci]"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
