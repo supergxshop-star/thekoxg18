@@ -288,7 +288,26 @@ class GitHubSyncEngine:
         print(f"\n[+] Batch complete. Total newly synced files: {processed_count}")
 
 
+def load_env_file():
+    """Load key-value pairs from .env file into os.environ if present."""
+    env_file = Path(".env")
+    if env_file.exists():
+        try:
+            with open(env_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k, v = k.strip(), v.strip().strip("'\"")
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+        except Exception as e:
+            print(f"[!] Warning reading .env: {e}")
+
+
 def main():
+    load_env_file()
+
     parser = argparse.ArgumentParser(description="Auto-sync media from API to GitHub")
     parser.add_argument("--token", default=os.getenv("GITHUB_TOKEN"), help="GitHub Personal Access Token")
     parser.add_argument("--repo", default=os.getenv("GITHUB_REPO"), help="Target GitHub repo (e.g. username/repo-name)")
@@ -301,17 +320,31 @@ def main():
 
     args = parser.parse_args()
 
-    if not args.token and args.mode == "release":
-        print("[!] Error: GitHub token required for 'release' mode. Set GITHUB_TOKEN or use --token.")
-        sys.exit(1)
+    token = args.token
+    repo = args.repo
 
-    if not args.repo and args.mode == "release":
-        print("[!] Error: GitHub repo required. Format: 'owner/repo'. Set GITHUB_REPO or use --repo.")
-        sys.exit(1)
+    if args.mode == "release":
+        if not token and sys.stdin.isatty():
+            try:
+                token = input("กรุณาใส่ GitHub Token: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                pass
+        if not repo and sys.stdin.isatty():
+            try:
+                repo = input("กรุณาใส่ชื่อ GitHub Repo (เช่น username/repo-name): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                pass
+
+        if not token:
+            print("[!] Error: ต้องระบุ GitHub Token (ตั้งค่าใน .env หรือผ่าน --token)")
+            sys.exit(1)
+        if not repo:
+            print("[!] Error: ต้องระบุ GitHub Repo (เช่น username/repo-name หรือผ่าน --repo)")
+            sys.exit(1)
 
     engine = GitHubSyncEngine(
-        token=args.token or "",
-        repo=args.repo or "",
+        token=token or "",
+        repo=repo or "",
         api_url=args.api,
         release_tag=args.tag,
         mode=args.mode,
