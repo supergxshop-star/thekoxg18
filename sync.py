@@ -298,11 +298,45 @@ def load_env_file():
                     line = line.strip()
                     if line and not line.startswith("#") and "=" in line:
                         k, v = line.split("=", 1)
-                        k, v = k.strip(), v.strip().strip("'\"")
-                        if k and k not in os.environ:
+                        k = k.strip()
+                        v = v.strip().strip("'\"")
+                        if k and v and k not in os.environ:
                             os.environ[k] = v
         except Exception as e:
             print(f"[!] Warning reading .env: {e}")
+
+
+def verify_github_access(token: str, repo: str) -> bool:
+    """Verify that token is valid and target repository exists with write access."""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github.v3+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    print(f"[*] ตรวจสอบการเชื่อมต่อกับ GitHub Repo: {repo}...")
+    user_res = requests.get("https://api.github.com/user", headers=headers, timeout=15)
+    if user_res.status_code == 401:
+        print("\n[!] ผิดพลาด: GitHub Token ไม่ถูกต้อง หรือคัดลอกมาไม่ครบ (HTTP 401 Bad credentials)")
+        print("[*] คำแนะนำ: กรุณาตรวจสอบว่า Token ขึ้นต้นด้วย ghp_ หรือ github_pat_ และคัดลอกมาครบทุกตัวอักษร")
+        return False
+
+    repo_res = requests.get(f"https://api.github.com/repos/{repo}", headers=headers, timeout=15)
+    if repo_res.status_code == 404:
+        print(f"\n[!] ผิดพลาด: ไม่พบ Repo '{repo}' บน GitHub หรือ Token นี้ไม่มีสิทธิ์เข้าถึง (HTTP 404 Not Found)")
+        print(f"[*] คำแนะนำ:")
+        print(f"    1. ตรวจสอบว่าคุณสร้าง Repository ชื่อ '{repo}' บน GitHub แล้วหรือไม่ (https://github.com/new)")
+        print(f"    2. รูปแบบชื่อ Repo ต้องเป็น: ชื่อบัญชี/ชื่อเรโป (เช่น myusername/my-clips)")
+        print(f"    3. หากใช้ Fine-grained Token ตรวจสอบว่าเลือก 'Repository access' เป็นเรโปนี้แล้ว และเปิดสิทธิ์ Contents / Releases เป็น 'Read and write'")
+        return False
+    elif repo_res.status_code != 200:
+        print(f"\n[!] GitHub API Error: HTTP {repo_res.status_code} - {repo_res.text}")
+        return False
+
+    user_info = user_res.json() if user_res.status_code == 200 else {}
+    username = user_info.get("login", "Authenticated User")
+    print(f"[+] ยืนยันตัวตนสำเร็จ: บัญชี {username}")
+    print(f"[+] พบ Repository: https://github.com/{repo}")
+    return True
 
 
 def main():
@@ -320,31 +354,41 @@ def main():
 
     args = parser.parse_args()
 
-    token = args.token
-    repo = args.repo
+    token = (args.token or "").strip()
+    repo = (args.repo or "").strip()
 
     if args.mode == "release":
-        if not token and sys.stdin.isatty():
-            try:
-                token = input("กรุณาใส่ GitHub Token: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                pass
-        if not repo and sys.stdin.isatty():
-            try:
-                repo = input("กรุณาใส่ชื่อ GitHub Repo (เช่น username/repo-name): ").strip()
-            except (EOFError, KeyboardInterrupt):
-                pass
+        while not token:
+            if sys.stdin.isatty():
+                try:
+                    token = input("กรุณาใส่ GitHub Token: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    break
+            else:
+                break
+
+        while not repo or "/" not in repo:
+            if sys.stdin.isatty():
+                try:
+                    repo = input("กรุณาใส่ชื่อ GitHub Repo (รูปแบบ 'username/repo-name'): ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    break
+            else:
+                break
 
         if not token:
             print("[!] Error: ต้องระบุ GitHub Token (ตั้งค่าใน .env หรือผ่าน --token)")
             sys.exit(1)
-        if not repo:
-            print("[!] Error: ต้องระบุ GitHub Repo (เช่น username/repo-name หรือผ่าน --repo)")
+        if not repo or "/" not in repo:
+            print("[!] Error: ต้องระบุ GitHub Repo ในรูปแบบ 'username/repo-name' (เช่น somchai/clips-vault)")
+            sys.exit(1)
+
+        if not args.dry_run and not verify_github_access(token, repo):
             sys.exit(1)
 
     engine = GitHubSyncEngine(
-        token=token or "",
-        repo=repo or "",
+        token=token,
+        repo=repo,
         api_url=args.api,
         release_tag=args.tag,
         mode=args.mode,
